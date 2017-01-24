@@ -3,5 +3,7 @@ module Main where
 import Stock
 
 main :: IO ()
-main =
-  (putStrLn . show) $ tableaux 24725231 50000
+main = do
+  rand <- getLine
+  size <- getLine
+  putStrLn $ show $ output (read rand) (read size)

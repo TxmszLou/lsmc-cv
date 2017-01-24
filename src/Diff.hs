@@ -18,7 +18,7 @@ instance Show DiffLang where
   show (Exp e)     = "(e^" ++ show e ++ ")"
 
 laguerre :: Int -> String -> DiffLang
-laguerre n x = ((Var x) :^: (Const (fromIntegral n))) :*: (Exp ((Const (-1)) :*: (Var x)))
+laguerre n x = ((Var x) :^: (Const (fromIntegral n))) :*: (Exp ((Const (-0.5)) :*: (Var x)))
 
 derivN :: Int -> DiffLang -> String -> DiffLang
 derivN 0 e x = e
