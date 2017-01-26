@@ -17,24 +17,28 @@ roundToN n number = (fromInteger (round (number * (10^n)))) / (10.0^n)
 
 -- constants
 r :: Double
-r = 0.04
+r = 0.06
 
 variance :: Double
-variance = 0.01
+variance = 0.04
 
-period :: Double
-period = 360.0
+days :: Int
+days = 360
 
 yperiod :: Double
-yperiod = period / 360.0
+yperiod = (fromIntegral days) / 360.0
+
+tdiff :: Int
+tdiff = 45
+
+tstep :: Double
+tstep = (fromIntegral tdiff) / 360.0
 
 s0 :: Double
--- s0 = 50.0000
-s0 = 90.000
+s0 = 36.0000
 
 k :: Double
--- k = 50.0000
-k = 100.00
+k = 40.000
 
 d1 :: Double
 d1 = (log (s0 / k) + (r + variance / 2) * yperiod) / (sqrt (variance * yperiod))
@@ -61,29 +65,25 @@ l n x
   | otherwise = error "undefined basis function"
 
 
--- tdiff = t_{d+1} - t_d
-tdiff :: Double
-tdiff = 1.0/360
-
 rzs :: Integer -> [Double]
 rzs rand = normals' (0.0,1.0) (mkStdGen (fromIntegral rand))
 
-sRand :: Integer -> Integer -> Double
+sRand :: Integer -> Int -> Double
 sRand j n =
   let zs = rzs j
   in s zs n
 
-s :: [Double] -> Integer -> R
+s :: [Double] -> Int -> R
 s zs 0 = s0
 s zs n
-  | n > 0 = roundToN ndigits $ (s zs (n - 1)) * (exp $ (r - variance/2) * tdiff + (sqrt (variance * tdiff) * (zs!!(fromInteger n))))
+  | n > 0 = roundToN ndigits $ (s zs (n - 1)) * (exp $ (r - variance/2) * tstep + (sqrt (variance * tstep) * (zs!!n)))
 
 
 cf :: [R] -> [R]
 cf = map (\stdj -> max (k - stdj) 0)
 
 cv :: R -> R
-cv = (* (exp (-r/360.0)))
+cv = (* (exp (-r * tstep)))
 
 eval :: DiffLang -> R -> R
 eval (Var _) x = x
@@ -110,7 +110,7 @@ laguerreJ :: Int -> R -> R
 laguerreJ j = eval (laguerre j "X")
 
 laguerreBasis :: [R -> R]
-laguerreBasis = map laguerreJ [0..60]
+laguerreBasis = map laguerreJ [0..(days `div` tdiff)]
 
 regCol :: Int -> [R -> R] -> Vector R -> Vector R -> Matrix R -- n x 1 result
 regCol n basis s t = linearSolveLS a b
@@ -125,28 +125,31 @@ evalPoly x betas = foldl (\acc beta -> acc + beta * x) 0 betas
 evalPolyL :: [R] -> [R] -> [R]
 evalPolyL xs betas = map (\x -> evalPoly x betas) xs
 
+epsilon :: Double
+epsilon = 0.00000001
+
 cfP :: ([Vector R], [Vector R]) -> Int -> [Vector R]
 cfP (paths, cfs) n
   | length paths > n && n > 1 = [newCFNP, finalCFN]
   | otherwise = error "undefined at the date!"
-  where finalCFN = fromList $ map (\(s,t) -> if s == 0.0 then 0.0 else t) (zip newCFN oldCFN)
-        newCFN = map (\(s,t) -> if max s t == t then s else 0.0) (zip oldCFP cfn)
-        newCFNP = fromList $ map (\(s,t) -> if max s t == s then s else 0.0) (zip oldCFP cfn)
+  where cfn = map (\case { (0,_) -> 0 ; (_,x) -> x }) $ zip oldCFP predCF
+        finalCFN = fromList $ map (\(s,t) -> if s == 0.0 then 0.0 else t) (zip newCFN oldCFN)
+        newCFN = map (\(s,t) -> if (max s t - t) <= epsilon then t else 0.0) (zip oldCFP cfn)
+        newCFNP = fromList $ map (\(s,t) -> if (max s t - s) <= epsilon then s else 0.0) (zip oldCFP cfn)
         oldCFN = toList $ cfs!!n
         oldCFP = toList $ cfs!!(n-1)
-        cfn = map (\case { (0,_) -> 0 ; (_,x) -> x }) $ zip oldCFP predCF
         predCF = map (\x -> (foldl (\acc -> \case { (n,beta) -> beta * (laguerreBasis!!n) x + acc }) 0 (betas!!(n-2)))) (toList (paths!!(n-1)))
         betas :: [[(Int,R)]]
-        betas = map (\n -> zip [0..n-1] ((toList . head . toColumns . regColN (paths, cfs)) n)) [2..60]
+        betas = map (\n -> zip [0..n-1] ((toList . head . toColumns . regColN (paths, cfs)) n)) [2..(days `div` tdiff)]
 
 cfGenR :: (Matrix R, Matrix R) -> [Vector R]
-cfGenR (paths, cfs) = foldl (\cfs' n -> take (n - 1) cfs' ++ cfP (pathsC, cfs') n ++ drop (n + 1) cfs') cfsC (reverse [2..60])
+cfGenR (paths, cfs) = foldl (\cfs' n -> take (n - 1) cfs' ++ cfP (pathsC, cfs') n ++ drop (n + 1) cfs') cfsC (reverse [2..(days `div` tdiff)])
   where pathsC = toColumns paths
         cfsC = toColumns cfs
 
 tableaux :: Integer -> Integer -> [[R]]
 tableaux rand size =
-  map (\r -> map (sRand r) [0..60]) ss
+  map (\r -> map (sRand r) [0..(days `div` tdiff)]) ss
   where ss :: [Integer]
         ss = seeds rand size
 
@@ -154,7 +157,7 @@ seeds :: Integer -> Integer -> [Integer]
 seeds rand length = take (fromIntegral length) $ map (\x -> (ceiling (abs x * 100000000000))) (rzs rand)
 
 tableauxM :: Integer -> Integer -> (Matrix R, Matrix R)
-tableauxM rand size = (matrix 61 paths, matrix 61 cfs)
+tableauxM rand size = (matrix (days `div` tdiff + 1) paths, matrix (days `div` tdiff + 1) cfs)
   where paths = concat (tableaux rand size)
         cfs   = cf paths
 
@@ -165,11 +168,11 @@ numNonZ :: Matrix R -> Int
 numNonZ = sum . map (length . (filter (/= 0)) . toList) . toColumns
 
 aOptionValue :: Matrix R -> [R]
-aOptionValue m = map (\lst -> if null lst then 0.0 else (exp (-r * ((fst (head lst)) / 360.0))) * (snd (head lst)))
-                 $ map (filter (\case {(n,x) -> x /= 0}) . zip [1..60] . toList) (toRows m)
+aOptionValue m = map (\lst -> if null lst then 0.0 else (exp (-r * (fromIntegral (fst (head lst))) * tstep)) * (snd (head lst)))
+                 $ map (filter (\case {(n,x) -> x /= 0}) . zip [1..(days `div` tdiff)] . toList) (toRows m)
 
 eOptionValue :: Matrix R -> [R]
-eOptionValue = map (* (exp (-r * yperiod))) . cf . toList . last . toColumns
+eOptionValue = map (* (exp (-r * (fromIntegral (days `div` tdiff + 1)) * tstep))) . cf . toList . last . toColumns
 
 cStarMin :: Integer -> (Matrix R, Matrix R) -> R
 cStarMin p (cf,m) = (/dist) . sum $ map (\i -> (vs!!(i-1) - vbar) * (qs!!(i-1) - qbar))  [1..(fromIntegral p)]
@@ -183,6 +186,7 @@ rbar :: Integer -> (Matrix R, Matrix R) -> R -> R
 rbar pass (cf,m) c = (/(fromIntegral pass)) . sum $ map (\i -> (vs!!(i-1)) - c * ((qs!!(i-1)) - p)) [1..(fromIntegral pass)]
   where vs = aOptionValue cf
         qs = eOptionValue m
+        qbar = sum qs / (fromIntegral (length qs))
 
 output :: Integer -> Integer -> R
 output rand size = rbar size (cfs, fst m) (cStarMin size (cfs, fst m))
