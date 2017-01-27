@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase, BangPatterns #-}
 module Stock where
 
 import Data.Random.Normal
@@ -20,7 +20,7 @@ r :: Double
 r = 0.06
 
 variance :: Double
-variance = 0.04
+variance = 0.2
 
 days :: Int
 days = 360
@@ -29,7 +29,7 @@ yperiod :: Double
 yperiod = (fromIntegral days) / 360.0
 
 tdiff :: Int
-tdiff = 45
+tdiff = 40
 
 tstep :: Double
 tstep = (fromIntegral tdiff) / 360.0
@@ -76,7 +76,7 @@ sRand j n =
 s :: [Double] -> Int -> R
 s zs 0 = s0
 s zs n
-  | n > 0 = roundToN ndigits $ (s zs (n - 1)) * (exp $ (r - variance/2) * tstep + (sqrt (variance * tstep) * (zs!!n)))
+  | n > 0 = roundToN ndigits $ (s zs (n - 1)) * (exp $ (r - variance/2) * tstep + ((sqrt (variance * tstep)) * (zs!!n)))
 
 
 cf :: [R] -> [R]
@@ -115,7 +115,8 @@ laguerreBasis = map laguerreJ [0..(days `div` tdiff)]
 regCol :: Int -> [R -> R] -> Vector R -> Vector R -> Matrix R -- n x 1 result
 regCol n basis s t = linearSolveLS a b
   where a :: Matrix R
-        a = fromColumns $ map (\j -> (fromList . map (basis!!j) . toList) s) [0..n-1]
+        -- a = fromColumns $ map (\j -> (fromList . map (basis!!j) . toList) s) [0..n-1]
+        a = fromRows $ map (\x -> (fromList . map (\j -> (basis!!j) x)) [0..n-1]) (toList s)
         b :: Matrix R
         b = (asColumn . fromList . map cv) (toList t)
 
@@ -132,15 +133,26 @@ cfP :: ([Vector R], [Vector R]) -> Int -> [Vector R]
 cfP (paths, cfs) n
   | length paths > n && n > 1 = [newCFNP, finalCFN]
   | otherwise = error "undefined at the date!"
-  where cfn = map (\case { (0,_) -> 0 ; (_,x) -> x }) $ zip oldCFP predCF
-        finalCFN = fromList $ map (\(s,t) -> if s == 0.0 then 0.0 else t) (zip newCFN oldCFN)
-        newCFN = map (\(s,t) -> if (max s t - t) <= epsilon then t else 0.0) (zip oldCFP cfn)
-        newCFNP = fromList $ map (\(s,t) -> if (max s t - s) <= epsilon then s else 0.0) (zip oldCFP cfn)
+  where cfn = map (\p -> if fst p == 0 then 0 else snd p) $ zip oldCFP predCF
+        finalCFN = fromList $ map (\(s,t) -> if s <= epsilon then 0.0 else t) (zip newCFN oldCFN)
+        newCFN = map (\(s,t) -> if t >= s then t else 0.0) (zip oldCFP cfn)
+        newCFNP = fromList $ map (\(s,t) -> if t >= s then 0.0 else s) (zip oldCFP cfn)
+        -- newCFNP = fromList $ map (\(s,t) -> if t <= epsilon then 0.0 else s) (zip oldCFP cfn)
         oldCFN = toList $ cfs!!n
         oldCFP = toList $ cfs!!(n-1)
-        predCF = map (\x -> (foldl (\acc -> \case { (n,beta) -> beta * (laguerreBasis!!n) x + acc }) 0 (betas!!(n-2)))) (toList (paths!!(n-1)))
-        betas :: [[(Int,R)]]
-        betas = map (\n -> zip [0..n-1] ((toList . head . toColumns . regColN (paths, cfs)) n)) [2..(days `div` tdiff)]
+        predCF = map (\x -> (foldl (\acc -> \case { (n,beta) -> beta * (laguerreBasis!!n) x + acc }) 0 betas)) (toList (paths!!(n-1)))
+        betas :: [(Int,R)]
+        betas = zip [0..n-1] ((toList . head . toColumns . regColN (paths, cfs)) n)
+
+cfGenRStep :: ([Vector R], [Vector R]) -> Int -> [Vector R]
+cfGenRStep (pathsC, cfsC) n = take (n - 1) cfsC ++ cfP (pathsC, cfsC) n ++ drop (n + 1) cfsC
+
+cfGenD :: (Matrix R, Matrix R) -> [Matrix R]
+cfGenD (paths, cfs) = map (fromColumns) $ foldl (\cfsCC n ->
+                               let cfs' = head cfsCC
+                               in (take (n - 1) cfs' ++ cfP (pathsC, cfs') n ++ drop (n + 1) cfs') : cfsCC)
+                      [toColumns cfs] (reverse [2..(days `div` tdiff)])
+  where pathsC = toColumns paths
 
 cfGenR :: (Matrix R, Matrix R) -> [Vector R]
 cfGenR (paths, cfs) = foldl (\cfs' n -> take (n - 1) cfs' ++ cfP (pathsC, cfs') n ++ drop (n + 1) cfs') cfsC (reverse [2..(days `div` tdiff)])
@@ -168,7 +180,7 @@ numNonZ :: Matrix R -> Int
 numNonZ = sum . map (length . (filter (/= 0)) . toList) . toColumns
 
 aOptionValue :: Matrix R -> [R]
-aOptionValue m = map (\lst -> if null lst then 0.0 else (exp (-r * (fromIntegral (fst (head lst))) * tstep)) * (snd (head lst)))
+aOptionValue m = map (\lst -> if null lst then 0.0 else (exp (-r * (fromIntegral (fst (last lst))) * tstep)) * (snd (last lst)))
                  $ map (filter (\case {(n,x) -> x /= 0}) . zip [1..(days `div` tdiff)] . toList) (toRows m)
 
 eOptionValue :: Matrix R -> [R]
@@ -192,3 +204,7 @@ output :: Integer -> Integer -> R
 output rand size = rbar size (cfs, fst m) (cStarMin size (cfs, fst m))
   where cfs = cfGen m
         m = tableauxM rand size
+
+genxs :: Integer -> [Double]
+genxs n = map (\i -> let x = aOptionValue (cfGen (tableauxM i 100))
+                     in sum x / (fromIntegral (length x)) ) [100..(100+n)]
